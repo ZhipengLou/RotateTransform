@@ -2,7 +2,7 @@
 rotate_transform.py
 -------------------
 Read 3D vector data (Euler angles, angular velocity, or acceleration) from a
-CSV file, rotate every vector by three user-supplied angles (Rx, Ry, Rz in
+CSV/DAT file, rotate every vector by three user-supplied angles (Rx, Ry, Rz in
 degrees), and write the result to a new CSV file in the same format.
 
 Input file format
@@ -16,13 +16,21 @@ Example header:
 
 Usage
 -----
-    python rotate_transform.py                          (interactive prompts)
+    python rotate_transform.py                          (uses defaults below)
     python rotate_transform.py input.csv output.csv     (filenames as args)
 """
 
 import sys
 import csv
 import math
+
+
+# ---------------------------------------------------------------------------
+# User configuration – edit these values before running the script
+# ---------------------------------------------------------------------------
+
+INPUT_FILE  = "kinematics_log_body_001.dat"   # example input file
+OUTPUT_FILE = "output.csv"                     # default output file
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +93,25 @@ def apply_rotation(R, vec):
 # ---------------------------------------------------------------------------
 
 def read_csv(filepath: str):
-    """Return (header_row, data_rows) where each row is a list of strings."""
+    """Return (header_row, data_rows) where each row is a list of strings.
+
+    Handles files where values are padded with whitespace and rows end with a
+    trailing comma (common in .dat exports).
+    """
     with open(filepath, newline="") as fh:
         reader = csv.reader(fh)
         rows = list(reader)
     if not rows:
         raise ValueError(f"Input file '{filepath}' is empty.")
-    return rows[0], rows[1:]
+    # Strip leading/trailing whitespace from every cell and remove trailing
+    # empty fields produced by a trailing comma.
+    cleaned = []
+    for row in rows:
+        stripped = [cell.strip() for cell in row]
+        while stripped and stripped[-1] == "":
+            stripped.pop()
+        cleaned.append(stripped)
+    return cleaned[0], cleaned[1:]
 
 
 def write_csv(filepath: str, header: list, data_rows: list):
@@ -158,10 +178,13 @@ def format_rows(data_rows: list, decimal_places: int = 6):
 # Main
 # ---------------------------------------------------------------------------
 
-def get_filename(prompt: str, argv_index: int) -> str:
+def get_filename(prompt: str, argv_index: int, default: str = "") -> str:
+    """Return a filename from argv, interactive input, or the supplied default."""
     if len(sys.argv) > argv_index:
         return sys.argv[argv_index]
-    return input(prompt).strip()
+    display = f"{prompt}[{default}]: " if default else f"{prompt}: "
+    value = input(display).strip()
+    return value if value else default
 
 
 def get_angle(axis: str) -> float:
@@ -179,8 +202,8 @@ def main():
     print("by user-specified angles around the X, Y, and Z axes.\n")
 
     # --- filenames ---
-    input_file = get_filename("Input file path : ", 1)
-    output_file = get_filename("Output file path: ", 2)
+    input_file = get_filename("Input file path ", 1, INPUT_FILE)
+    output_file = get_filename("Output file path", 2, OUTPUT_FILE)
 
     # --- rotation angles ---
     print("\nEnter the rotation angles (applied as Rx first, then Ry, then Rz):")
