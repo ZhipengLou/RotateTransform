@@ -2,8 +2,8 @@
 rotate_transform.py
 -------------------
 Read 3D vector data (Euler angles, angular velocity, or acceleration) from a
-CSV/DAT file, rotate every vector by three user-supplied angles (Rx, Ry, Rz in
-degrees), and write the result to a new CSV file in the same format.
+text DAT file, rotate every vector by three user-supplied angles (Rx, Ry, Rz in
+degrees), and write the result to a new text file in the same format.
 
 Input file format
 -----------------
@@ -17,11 +17,9 @@ Example header:
 Usage
 -----
     python rotate_transform.py                          (uses defaults below)
-    python rotate_transform.py input.csv output.csv     (filenames as args)
+    python rotate_transform.py input.dat output.dat     (filenames as args)
 """
 
-import sys
-import csv
 import math
 
 
@@ -29,8 +27,13 @@ import math
 # User configuration – edit these values before running the script
 # ---------------------------------------------------------------------------
 
-INPUT_FILE  = "kinematics_log_body_001.dat"   # example input file
-OUTPUT_FILE = "output.csv"                     # default output file
+INPUT_FILE  = "kinematics_log_body_001.dat"   # input file
+OUTPUT_FILE = "kinematics_log_body_001_rotated.dat"   # output file
+
+# Rotation angles in degrees (Rx then Ry then Rz)
+RX_DEG = 0.0
+RY_DEG = 0.0
+RZ_DEG = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -92,35 +95,45 @@ def apply_rotation(R, vec):
 # File I/O
 # ---------------------------------------------------------------------------
 
-def read_csv(filepath: str):
-    """Return (header_row, data_rows) where each row is a list of strings.
+def read_text_table(filepath: str):
+    """Return (header_row, data_rows, trailing_comma).
 
-    Handles files where values are padded with whitespace and rows end with a
-    trailing comma (common in .dat exports).
+    Parses comma-separated text with optional whitespace padding and a trailing
+    comma on data lines (common in .dat exports).
     """
-    with open(filepath, newline="") as fh:
-        reader = csv.reader(fh)
-        rows = list(reader)
-    if not rows:
+    with open(filepath, "r", newline="") as fh:
+        raw_lines = [line.rstrip("\n") for line in fh]
+    lines = [line for line in raw_lines if line.strip()]
+    if not lines:
         raise ValueError(f"Input file '{filepath}' is empty.")
-    # Strip leading/trailing whitespace from every cell and remove trailing
-    # empty fields produced by a trailing comma.
-    cleaned = []
-    for row in rows:
-        stripped = [cell.strip() for cell in row]
-        last_idx = len(stripped) - 1
-        while last_idx >= 0 and stripped[last_idx] == "":
-            last_idx -= 1
-        cleaned.append(stripped[:last_idx + 1])
-    return cleaned[0], cleaned[1:]
+
+    def split_row(line: str):
+        parts = [part.strip() for part in line.split(",")]
+        had_trailing = False
+        if parts and parts[-1] == "":
+            had_trailing = True
+            parts = parts[:-1]
+        return parts, had_trailing
+
+    header, _ = split_row(lines[0])
+    data_rows = []
+    trailing_comma = False
+    for line in lines[1:]:
+        row, had_trailing = split_row(line)
+        trailing_comma = trailing_comma or had_trailing
+        data_rows.append(row)
+    return header, data_rows, trailing_comma
 
 
-def write_csv(filepath: str, header: list, data_rows: list):
-    """Write header + data_rows to a CSV file."""
+def write_text_table(filepath: str, header: list, data_rows: list, trailing_comma: bool):
+    """Write header + data_rows to a comma-separated text file."""
     with open(filepath, "w", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(header)
-        writer.writerows(data_rows)
+        fh.write(", ".join(header) + "\n")
+        for row in data_rows:
+            line = ", ".join(str(value) for value in row)
+            if trailing_comma:
+                line += ","
+            fh.write(line + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -161,14 +174,46 @@ def transform_rows(data_rows: list, R):
     return out
 
 
-def format_rows(data_rows: list, decimal_places: int = 6):
-    """Round float values to a fixed number of decimal places."""
+def _detect_column_formats(data_rows: list):
+    """Infer numeric formatting (scientific + decimals) from input strings."""
+    formats = {}
+    max_cols = max((len(r) for r in data_rows), default=0)
+    for col in range(max_cols):
+        for row in data_rows:
+            if col >= len(row):
+                continue
+            token = row[col]
+            try:
+                float(token)
+            except ValueError:
+                continue
+            if "e" in token.lower():
+                mantissa = token.split("e")[0]
+                decimals = mantissa.split(".")[1] if "." in mantissa else ""
+                formats[col] = ("scientific", len(decimals))
+            else:
+                decimals = token.split(".")[1] if "." in token else ""
+                formats[col] = ("fixed", len(decimals))
+            break
+    return formats
+
+
+def format_rows(data_rows: list, column_formats: dict):
+    """Format float values using the same precision/style as input data."""
     formatted = []
     for row in data_rows:
         new_row = []
-        for val in row:
+        for col, val in enumerate(row):
             if isinstance(val, float):
-                new_row.append(round(val, decimal_places))
+                fmt = column_formats.get(col)
+                if fmt is None:
+                    new_row.append(repr(val))
+                else:
+                    style, decimals = fmt
+                    if style == "scientific":
+                        new_row.append(f"{val:.{decimals}E}")
+                    else:
+                        new_row.append(f"{val:.{decimals}f}")
             else:
                 new_row.append(val)
         formatted.append(new_row)
@@ -178,43 +223,23 @@ def format_rows(data_rows: list, decimal_places: int = 6):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-def get_filename(prompt: str, argv_index: int, default: str = "") -> str:
-    """Return a filename from argv, interactive input, or the supplied default."""
-    if len(sys.argv) > argv_index:
-        return sys.argv[argv_index]
-    display = f"{prompt}: [{default}]: " if default else f"{prompt}: "
-    value = input(display).strip()
-    return value if value else default
-
-
-def get_angle(axis: str) -> float:
-    while True:
-        raw = input(f"  Rotation angle around {axis}-axis (degrees): ").strip()
-        try:
-            return float(raw)
-        except ValueError:
-            print("  Please enter a valid number.")
-
-
 def main():
     print("=== RotateTransform ===")
     print("Rotates 3-D vector data (Euler angles, angular velocity, acceleration)")
     print("by user-specified angles around the X, Y, and Z axes.\n")
 
     # --- filenames ---
-    input_file = get_filename("Input file path ", 1, INPUT_FILE)
-    output_file = get_filename("Output file path", 2, OUTPUT_FILE)
+    input_file = INPUT_FILE
+    output_file = OUTPUT_FILE
 
     # --- rotation angles ---
-    print("\nEnter the rotation angles (applied as Rx first, then Ry, then Rz):")
-    rx = get_angle("X")
-    ry = get_angle("Y")
-    rz = get_angle("Z")
+    rx = RX_DEG
+    ry = RY_DEG
+    rz = RZ_DEG
 
     # --- read ---
     print(f"\nReading '{input_file}' ...")
-    header, data_rows = read_csv(input_file)
+    header, data_rows, trailing_comma = read_text_table(input_file)
 
     if not data_rows:
         print("Warning: no data rows found in the input file.")
@@ -222,10 +247,11 @@ def main():
     # --- transform ---
     R = rotation_matrix(rx, ry, rz)
     transformed = transform_rows(data_rows, R)
-    formatted = format_rows(transformed)
+    column_formats = _detect_column_formats(data_rows)
+    formatted = format_rows(transformed, column_formats)
 
     # --- write ---
-    write_csv(output_file, header, formatted)
+    write_text_table(output_file, header, formatted, trailing_comma)
     print(f"Transformed data written to '{output_file}'.")
     print(f"  Rows processed : {len(data_rows)}")
     print(f"  Rotation applied: Rx={rx}°  Ry={ry}°  Rz={rz}°")
