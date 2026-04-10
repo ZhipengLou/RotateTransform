@@ -108,9 +108,10 @@ def read_csv(filepath: str):
     cleaned = []
     for row in rows:
         stripped = [cell.strip() for cell in row]
-        while stripped and stripped[-1] == "":
-            stripped.pop()
-        cleaned.append(stripped)
+        last_idx = len(stripped) - 1
+        while last_idx >= 0 and stripped[last_idx] == "":
+            last_idx -= 1
+        cleaned.append(stripped[:last_idx + 1])
     return cleaned[0], cleaned[1:]
 
 
@@ -182,7 +183,7 @@ def get_filename(prompt: str, argv_index: int, default: str = "") -> str:
     """Return a filename from argv, interactive input, or the supplied default."""
     if len(sys.argv) > argv_index:
         return sys.argv[argv_index]
-    display = f"{prompt}[{default}]: " if default else f"{prompt}: "
+    display = f"{prompt}: [{default}]: " if default else f"{prompt}: "
     value = input(display).strip()
     return value if value else default
 
